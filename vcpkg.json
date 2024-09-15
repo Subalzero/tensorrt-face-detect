@@ -1,0 +1,8 @@
+{
+  "name": "tensorrt-face-detect",
+  "version": "1.0.0",
+  "dependencies": [
+    "opencv4"
+  ],
+  "builtin-baseline": "86fba13068f1e8111e7d885de2aef11378435139"
+}

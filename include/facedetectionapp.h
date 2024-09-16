@@ -4,6 +4,8 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "opencv2/opencv.hpp"
+
 #include "tensorrtrunner.h"
 
 class FaceDetectionApp
@@ -15,9 +17,14 @@ public:
 	int exec();
 private:
 	void print_help_info();
+	RunnerParams initializeParams(const samplesCommon::Args& args);
+	cv::Mat preprocess(const cv::Mat& frame);
+	
 
 	int _argc;
 	char** _argv;
+
+	TensorRTRunner _runner;
 };
 
 #endif // FACE_DETECTION_APP_H

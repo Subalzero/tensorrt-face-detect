@@ -57,6 +57,9 @@ public:
     void process_async(const std::vector<float>& input);
 
     void get(std::vector<float>& result);
+
+    std::vector<size_t> get_input_shape() const;
+    std::vector<size_t> get_output_shape() const;
     
 private:
     RunnerParams _params;

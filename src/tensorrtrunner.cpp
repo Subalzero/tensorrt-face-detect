@@ -149,6 +149,66 @@ void TensorRTRunner::process(const std::vector<float>& input)
 
 	// Memcpy from device output buffers to host output buffers
 	buffers.copyOutputToHost();
+
+	uint32_t output_size = 0;
+	std::vector<size_t> dims = get_output_shape();
+	output_size = dims[0];
+	for (int i = 1; i < dims.size(); ++i)
+	{
+		output_size *= dims[i];
+	}
+
+	float* output = static_cast<float*>(buffers.getHostBuffer(_network->getOutput(0)->getName()));
+
+	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
+	_inference_results.push(std::vector<float>(output, output + output_size));
+	_inference_results_cond.notify_one();
+	inference_results_lock.unlock();
+
+	busy_contexts_lock.lock();
+	_busy_contexts_cond.wait(busy_contexts_lock, [&]() { return !_busy_contexts.empty(); });
+	_busy_contexts.pop();
+	busy_contexts_lock.unlock();
+
+	idle_context_lock.lock();
+	_idle_contexts.push(context);
+	_idle_contexts_cond.notify_one();
+	idle_context_lock.unlock();
+}
+
+void TensorRTRunner::process_async(const std::vector<float>& input)
+{
+	std::thread(&TensorRTRunner::process, this, input).detach();
+}
+
+void TensorRTRunner::get(std::vector<float>& result)
+{
+	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
+	_inference_results_cond.wait(inference_results_lock, [&]() { return !_inference_results.empty(); });
+	result = _inference_results.front();
+	_inference_results.pop();
+}
+
+std::vector<size_t> TensorRTRunner::get_input_shape() const
+{
+	std::vector<size_t> vect{};
+	nvinfer1::Dims dims = _network->getInput(0)->getDimensions();
+	for (int i = 0; i < dims.nbDims; ++i)
+	{
+		vect.push_back(dims.d[i]);
+	}
+	return vect;
+}
+
+std::vector<size_t> TensorRTRunner::get_output_shape() const
+{
+	std::vector<size_t> vect{};
+	nvinfer1::Dims dims = _network->getOutput(0)->getDimensions();
+	for (int i = 0; i < dims.nbDims; ++i)
+	{
+		vect.push_back(dims.d[i]);
+	}
+	return vect;
 }
 
 bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& builder, std::shared_ptr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config, SampleUniquePtr<nvonnxparser::IParser>& parser, SampleUniquePtr<nvinfer1::ITimingCache>& timingCache)

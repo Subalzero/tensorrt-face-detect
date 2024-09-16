@@ -25,8 +25,21 @@ int FaceDetectionApp::exec()
         print_help_info();
         return EXIT_SUCCESS;
     }
-	std::cout << "Hello, world!" << std::endl;
-	return 0;
+	
+    auto sampleTest = sample::gLogger.defineTest("FaceDetect", _argc, _argv);
+
+    sample::gLogger.reportTestStart(sampleTest);
+
+    _runner = TensorRTRunner(initializeParams(args));
+
+    sample::gLogInfo << "Building and running a GPU inference engine for Onnx MNIST" << std::endl;
+
+    if (!_runner.build())
+    {
+        return sample::gLogger.reportFail(sampleTest);
+    }
+
+    return sample::gLogger.reportPass(sampleTest);
 }
 
 void FaceDetectionApp::print_help_info()
@@ -47,4 +60,39 @@ void FaceDetectionApp::print_help_info()
     std::cout << "--bf16             Run in BF16 mode." << std::endl;
     std::cout << "--timingCacheFile  Specify path to a timing cache file. If it does not already exist, it will be "
         << "created." << std::endl;
+}
+
+RunnerParams FaceDetectionApp::initializeParams(const samplesCommon::Args& args)
+{
+    RunnerParams params;
+    if (args.dataDirs.empty()) // Use default directories if user hasn't provided directory paths
+    {
+        params.dataDirs.push_back("models");
+    }
+    else // Use the data directory provided by the user
+    {
+        params.dataDirs = args.dataDirs;
+    }
+    params.onnxFileName = "version-RFB-640.onnx";
+    params.inputTensorNames.push_back("Input3");
+    params.outputTensorNames.push_back("Plus214_Output_0");
+    params.dlaCore = args.useDLACore;
+    params.int8 = args.runInInt8;
+    params.fp16 = args.runInFp16;
+    params.bf16 = args.runInBf16;
+    params.timingCacheFile = args.timingCacheFile;
+
+    return params;
+}
+
+cv::Mat FaceDetectionApp::preprocess(const cv::Mat& frame)
+{
+    cv::Mat out;
+    auto input_shape = _runner.get_input_shape();
+    uint32_t mWidth = input_shape[3];
+    uint32_t mHeight = input_shape[2];
+    cv::resize(frame, out, cv::Size(mWidth, mHeight));
+    out.convertTo(out, CV_32F);
+    cv::Mat output = cv::dnn::blobFromImage(out, 1. / 128, {}, { 127, 127, 127 });
+    return output;
 }

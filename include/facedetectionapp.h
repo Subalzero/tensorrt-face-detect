@@ -2,6 +2,7 @@
 #define FACE_DETECTION_APP_H
 
 #include <iostream>
+#include <stdexcept>
 
 #include "tensorrtrunner.h"
 
@@ -12,6 +13,11 @@ public:
 	~FaceDetectionApp();
 
 	int exec();
+private:
+	void print_help_info();
+
+	int _argc;
+	char** _argv;
 };
 
 #endif // FACE_DETECTION_APP_H

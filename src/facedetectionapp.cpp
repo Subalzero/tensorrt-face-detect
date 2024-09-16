@@ -39,7 +39,20 @@ int FaceDetectionApp::exec()
         return sample::gLogger.reportFail(sampleTest);
     }
 
-    return sample::gLogger.reportPass(sampleTest);
+    sample::gLogger.reportPass(sampleTest);
+
+    cv::VideoCapture cap(0, cv::CAP_MSMF);
+
+    if (cap.isOpened())
+    {
+        cv::Mat frame;
+        cap >> frame;
+        cv::Mat fr = preprocess(frame);
+        auto input_shape = _runner.get_input_shape();
+
+        std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
+        _runner.process(input_vector);
+    }
 }
 
 void FaceDetectionApp::print_help_info()

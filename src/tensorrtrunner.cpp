@@ -119,7 +119,9 @@ bool TensorRTRunner::build()
 void TensorRTRunner::process(const std::vector<float>& input)
 {
 	// Create RAII buffer manager object
+	std::unique_lock<std::mutex> engine_lock(_engine_mut);
 	samplesCommon::BufferManager buffers(_engine);
+	engine_lock.unlock();
 
 	std::unique_lock<std::mutex> idle_context_lock(_idle_contexts_mut);
 	_idle_contexts_cond.wait(idle_context_lock, [&]() { return !_idle_contexts.empty(); });
@@ -137,6 +139,11 @@ void TensorRTRunner::process(const std::vector<float>& input)
 
 	// Memcpy from host input buffers to device input buffers
 	buffers.copyInputToDevice();
+
+	std::unique_lock<std::mutex> busy_contexts_lock(_busy_contexts_mut);
+	_busy_contexts.push(context);
+	_busy_contexts_cond.notify_one();
+	busy_contexts_lock.unlock();
 
 	context->executeV2(buffers.getDeviceBindings().data());
 

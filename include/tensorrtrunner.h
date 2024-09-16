@@ -74,6 +74,8 @@ private:
     std::mutex _busy_contexts_mut;
     std::mutex _inference_results_mut;
 
+    std::mutex _engine_mut;
+
     std::condition_variable _idle_contexts_cond;
     std::condition_variable _busy_contexts_cond;
     std::condition_variable _inference_results_cond;

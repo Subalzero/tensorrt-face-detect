@@ -19,7 +19,7 @@ private:
 	void print_help_info();
 	RunnerParams initializeParams(const samplesCommon::Args& args);
 	cv::Mat preprocess(const cv::Mat& frame);
-	
+	void postprocess(const std::vector<float>& boxes, const std::vector<float>& scores, std::vector<int>& indices);
 
 	int _argc;
 	char** _argv;

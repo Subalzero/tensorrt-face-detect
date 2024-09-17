@@ -48,10 +48,17 @@ int FaceDetectionApp::exec()
         cv::Mat frame;
         cap >> frame;
         cv::Mat fr = preprocess(frame);
-        auto input_shape = _runner.get_input_shape();
+        auto input_shape = _runner.get_input_shape(0);
 
         std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-        _runner.process(input_vector);
+        _runner.process_async({ input_vector });
+
+        std::vector<float> scores, boxes;
+        _runner.get(scores);
+        _runner.get(boxes);
+
+        std::vector<int> indices;
+        postprocess(boxes, scores, indices);
     }
 }
 
@@ -101,11 +108,15 @@ RunnerParams FaceDetectionApp::initializeParams(const samplesCommon::Args& args)
 cv::Mat FaceDetectionApp::preprocess(const cv::Mat& frame)
 {
     cv::Mat out;
-    auto input_shape = _runner.get_input_shape();
+    auto input_shape = _runner.get_input_shape(0);
     uint32_t mWidth = input_shape[3];
     uint32_t mHeight = input_shape[2];
     cv::resize(frame, out, cv::Size(mWidth, mHeight));
     out.convertTo(out, CV_32F);
     cv::Mat output = cv::dnn::blobFromImage(out, 1. / 128, {}, { 127, 127, 127 });
     return output;
+}
+
+void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::vector<float>& scores, std::vector<int>& indices)
+{
 }

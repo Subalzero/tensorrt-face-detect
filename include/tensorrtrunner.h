@@ -53,13 +53,15 @@ public:
 
     bool build();
 
-    void process(const std::vector<float>& input);
-    void process_async(const std::vector<float>& input);
+    void process(const std::vector<std::vector<float>>& input);
+    void process_async(const std::vector<std::vector<float>>& input);
 
     void get(std::vector<float>& result);
 
-    std::vector<size_t> get_input_shape() const;
-    std::vector<size_t> get_output_shape() const;
+    std::vector<size_t> get_input_shape(uint32_t index) const;
+    std::vector<size_t> get_output_shape(uint32_t index) const;
+    size_t get_number_of_inputs() const;
+    size_t get_number_of_outputs() const;
     
 private:
     RunnerParams _params;
@@ -90,7 +92,7 @@ private:
     //!
     //! \brief Reads the input  and stores the result in a managed buffer
     //!
-    bool process_input(const samplesCommon::BufferManager& buffers, const std::vector<float>& input);
+    bool process_input(const samplesCommon::BufferManager& buffers, const std::vector<std::vector<float>>& input);
 
     //!
     //! \brief Classifies digits and verify result

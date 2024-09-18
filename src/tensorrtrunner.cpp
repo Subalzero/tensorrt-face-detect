@@ -46,67 +46,99 @@ bool TensorRTRunner::build()
 		return false;
 	}
 
-	_network = SampleUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(0));
-	if (!_network)
+	std::vector<char> plan_data;
+	bool load_engine_success = false;
+	if (load_engine(plan_data))
 	{
-		return false;
+		_runtime = std::shared_ptr<nvinfer1::IRuntime>(createInferRuntime(sample::gLogger.getTRTLogger()));
+		if (!_runtime)
+		{
+			load_engine_success = false;
+		}
+
+		_engine = std::shared_ptr<nvinfer1::ICudaEngine>(
+			_runtime->deserializeCudaEngine(plan_data.data(), plan_data.size()), samplesCommon::InferDeleter());
+		if (!_engine)
+		{
+			load_engine_success = false;
+		}
+
+		if (_runtime && _engine)
+		{
+			sample::gLogInfo << "Loaded model from .engine file." << std::endl;
+			load_engine_success = true;
+		}
 	}
 
-	auto config = SampleUniquePtr<nvinfer1::IBuilderConfig>(builder->createBuilderConfig());
-	if (!config)
+	if (!load_engine_success)
 	{
-		return false;
+		auto network = SampleUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(0));
+		if (!network)
+		{
+			return false;
+		}
+
+		auto config = SampleUniquePtr<nvinfer1::IBuilderConfig>(builder->createBuilderConfig());
+		if (!config)
+		{
+			return false;
+		}
+
+		auto parser
+			= SampleUniquePtr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger()));
+		if (!parser)
+		{
+			return false;
+		}
+
+		auto timingCache = SampleUniquePtr<nvinfer1::ITimingCache>();
+
+		auto constructed = construct_network(builder, network, config, parser, timingCache);
+		if (!constructed)
+		{
+			return false;
+		}
+
+		// CUDA stream used for profiling by the builder.
+		auto profileStream = samplesCommon::makeCudaStream();
+		if (!profileStream)
+		{
+			return false;
+		}
+		config->setProfileStream(*profileStream);
+
+		SampleUniquePtr<IHostMemory> plan{ builder->buildSerializedNetwork(*network, *config) };
+		if (!plan)
+		{
+			return false;
+		}
+
+		if (save_engine_to_plan_file(plan.get()))
+		{
+			sample::gLogInfo << "Saved engine as plan file" << std::endl;
+		}
+
+		if (timingCache != nullptr && !_params.timingCacheFile.empty())
+		{
+			samplesCommon::updateTimingCacheFile(
+				sample::gLogger.getTRTLogger(), _params.timingCacheFile, timingCache.get(), *builder);
+		}
+
+		_runtime = std::shared_ptr<nvinfer1::IRuntime>(createInferRuntime(sample::gLogger.getTRTLogger()));
+		if (!_runtime)
+		{
+			return false;
+		}
+
+		_engine = std::shared_ptr<nvinfer1::ICudaEngine>(
+			_runtime->deserializeCudaEngine(plan->data(), plan->size()), samplesCommon::InferDeleter());
+		if (!_engine)
+		{
+			return false;
+		}
 	}
 
-	auto parser
-		= SampleUniquePtr<nvonnxparser::IParser>(nvonnxparser::createParser(*_network, sample::gLogger.getTRTLogger()));
-	if (!parser)
-	{
-		return false;
-	}
-
-	auto timingCache = SampleUniquePtr<nvinfer1::ITimingCache>();
-
-	auto constructed = construct_network(builder, _network, config, parser, timingCache);
-	if (!constructed)
-	{
-		return false;
-	}
-
-	// CUDA stream used for profiling by the builder.
-	auto profileStream = samplesCommon::makeCudaStream();
-	if (!profileStream)
-	{
-		return false;
-	}
-	config->setProfileStream(*profileStream);
-
-	SampleUniquePtr<IHostMemory> plan{ builder->buildSerializedNetwork(*_network, *config) };
-	if (!plan)
-	{
-		return false;
-	}
-
-	if (timingCache != nullptr && !_params.timingCacheFile.empty())
-	{
-		samplesCommon::updateTimingCacheFile(
-			sample::gLogger.getTRTLogger(), _params.timingCacheFile, timingCache.get(), *builder);
-	}
-
-	_runtime = std::shared_ptr<nvinfer1::IRuntime>(createInferRuntime(sample::gLogger.getTRTLogger()));
-	if (!_runtime)
-	{
-		return false;
-	}
-
-	_engine = std::shared_ptr<nvinfer1::ICudaEngine>(
-		_runtime->deserializeCudaEngine(plan->data(), plan->size()), samplesCommon::InferDeleter());
-	if (!_engine)
-	{
-		return false;
-	}
-
-	uint32_t nireq = 4;
+	uint32_t nireq = _params.nContexts;
 	for (uint32_t i = 0; i < nireq; ++i)
 	{
 		_execution_contexts.emplace_back(_engine->createExecutionContext());
@@ -179,7 +211,8 @@ void TensorRTRunner::get(std::vector<float>& result)
 std::vector<size_t> TensorRTRunner::get_input_shape(uint32_t index) const
 {
 	std::vector<size_t> vect{};
-	nvinfer1::Dims dims = _network->getInput(index)->getDimensions();
+
+	nvinfer1::Dims dims = _engine->getTensorShape(get_input_tensor_name(index).c_str());
 	for (int i = 0; i < dims.nbDims; ++i)
 	{
 		vect.push_back(dims.d[i]);
@@ -190,7 +223,8 @@ std::vector<size_t> TensorRTRunner::get_input_shape(uint32_t index) const
 std::vector<size_t> TensorRTRunner::get_output_shape(uint32_t index) const
 {
 	std::vector<size_t> vect{};
-	nvinfer1::Dims dims = _network->getOutput(index)->getDimensions();
+
+	nvinfer1::Dims dims = _engine->getTensorShape(get_output_tensor_name(index).c_str());
 	for (int i = 0; i < dims.nbDims; ++i)
 	{
 		vect.push_back(dims.d[i]);
@@ -198,17 +232,81 @@ std::vector<size_t> TensorRTRunner::get_output_shape(uint32_t index) const
 	return vect;
 }
 
+std::string TensorRTRunner::get_input_tensor_name(uint32_t index) const
+{
+	std::vector<std::string> input_names;
+
+	int numIOTensors = _engine->getNbIOTensors();
+
+	for (int i = 0; i < numIOTensors; ++i) {
+		const char* tensorName = _engine->getIOTensorName(i);
+
+		if (_engine->getTensorIOMode(tensorName) == TensorIOMode::kINPUT) {
+			input_names.push_back(tensorName);
+		}
+	}
+
+	return input_names[index];
+}
+
+std::string TensorRTRunner::get_output_tensor_name(uint32_t index) const
+{
+	std::vector<std::string> output_names;
+
+	int numIOTensors = _engine->getNbIOTensors();
+
+	for (int i = 0; i < numIOTensors; ++i) {
+		const char* tensorName = _engine->getIOTensorName(i);
+
+		if (_engine->getTensorIOMode(tensorName) == TensorIOMode::kOUTPUT) {
+			output_names.push_back(tensorName);
+		}
+	}
+
+	return output_names[index];
+}
+
 size_t TensorRTRunner::get_number_of_inputs() const
 {
-	return _network->getNbInputs();
+	// Step 1: Get the number of I/O tensors
+	int numIOTensors = _engine->getNbIOTensors();
+	int numInputLayers = 0;
+
+	// Step 2: Loop through all tensors and count the inputs
+	for (int i = 0; i < numIOTensors; ++i) {
+		// Get the tensor name at index i
+		const char* tensorName = _engine->getIOTensorName(i);
+
+		// Step 3: Check if this tensor is an input
+		if (_engine->getTensorIOMode(tensorName) == TensorIOMode::kINPUT) {
+			numInputLayers++;
+		}
+	}
+
+	return numInputLayers;
 }
 
 size_t TensorRTRunner::get_number_of_outputs() const
 {
-	return _network->getNbOutputs();
+	// Step 1: Get the number of I/O tensors
+	int numIOTensors = _engine->getNbIOTensors();
+	int numOutputLayers = 0;
+
+	// Step 2: Loop through all tensors and count the outputs
+	for (int i = 0; i < numIOTensors; ++i) {
+		// Get the tensor name at index i
+		const char* tensorName = _engine->getIOTensorName(i);
+
+		// Step 3: Check if this tensor is an output
+		if (_engine->getTensorIOMode(tensorName) == TensorIOMode::kOUTPUT) {
+			numOutputLayers++;
+		}
+	}
+
+	return numOutputLayers;
 }
 
-bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& builder, std::shared_ptr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config, SampleUniquePtr<nvonnxparser::IParser>& parser, SampleUniquePtr<nvinfer1::ITimingCache>& timingCache)
+bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& builder, SampleUniquePtr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config, SampleUniquePtr<nvonnxparser::IParser>& parser, SampleUniquePtr<nvinfer1::ITimingCache>& timingCache)
 {
 	auto parsed = parser->parseFromFile(locateFile(_params.onnxFileName, _params.dataDirs).c_str(),
 		static_cast<int>(sample::gLogger.getReportableSeverity()));
@@ -246,15 +344,17 @@ bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, 
 	auto n_inputs = get_number_of_inputs();
 	for (int32_t i = 0; i < n_inputs; ++i)
 	{
-		nvinfer1::Dims input_dims = _network->getInput(i)->getDimensions();
+		uint32_t input_size = 0;
+		std::vector<size_t> input_dims = get_input_shape(i);
+		input_size = input_dims[0];
+		for (int i = 1; i < input_dims.size(); ++i)
+		{
+			input_size *= input_dims[i];
+		}
 
-		const int inputH = input_dims.d[2];
-		const int inputW = input_dims.d[3];
-		const int inputC = input_dims.d[1];
+		const int nElems = input_size;
 
-		const int nElems = inputH * inputW * inputC;
-
-		float* hostDataBuffer = static_cast<float*>(buffers.getHostBuffer(_network->getInput(i)->getName()));
+		float* hostDataBuffer = static_cast<float*>(buffers.getHostBuffer(get_input_tensor_name(i)));
 
 		for (int j = 0; j < nElems; ++j)
 		{
@@ -271,14 +371,14 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 	for (uint32_t i = 0; i < n_outputs; ++i)
 	{
 		uint32_t output_size = 0;
-		nvinfer1::Dims output_dims = _network->getOutput(i)->getDimensions();
-		output_size = output_dims.d[0];
-		for (int i = 1; i < output_dims.nbDims; ++i)
+		std::vector<size_t> output_dims = get_output_shape(i);
+		output_size = output_dims[0];
+		for (int i = 1; i < output_dims.size(); ++i)
 		{
-			output_size *= output_dims.d[i];
+			output_size *= output_dims[i];
 		}
 
-		float* output = static_cast<float*>(buffers.getHostBuffer(_network->getOutput(i)->getName()));
+		float* output = static_cast<float*>(buffers.getHostBuffer(get_output_tensor_name(i)));
 
 		std::lock_guard<std::mutex> inference_results_lock(_inference_results_mut);
 		_inference_results.push(std::vector<float>(output, output + output_size));
@@ -287,3 +387,39 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 	return true;
 }
 
+bool TensorRTRunner::load_engine(std::vector<char>& data) {
+	std::istringstream stream(_params.onnxFileName);
+	std::string file_name;
+	std::getline(stream, file_name, '.');
+	std::string engineFilePath = file_name + ".engine";
+	std::ifstream file(engineFilePath, std::ios::binary);
+	if (!file) {
+		//throw std::runtime_error("Could not open engine file: " + engineFilePath);
+		sample::gLogError << "Could not open engine file: " + engineFilePath << std::endl;
+		sample::gLogInfo << "Will attempt to create engine file from .onnx model." << std::endl;
+		return false;
+	}
+
+	file.seekg(0, std::ifstream::end);
+	size_t fileSize = file.tellg();
+	file.seekg(0, std::ifstream::beg);
+
+	std::vector<char> engineData(fileSize);
+	file.read(engineData.data(), fileSize);
+	file.close();
+
+	data = engineData;
+	return true;
+}
+
+bool TensorRTRunner::save_engine_to_plan_file(nvinfer1::IHostMemory* plan)
+{
+	std::istringstream stream(_params.onnxFileName);
+	std::string file_name;
+	std::getline(stream, file_name, '.');
+	std::string planFilePath = file_name + ".engine";
+	std::ofstream planFile(planFilePath, std::ios::binary);
+	planFile.write(reinterpret_cast<const char*>(plan->data()), plan->size());
+	planFile.close();
+	return true;
+}

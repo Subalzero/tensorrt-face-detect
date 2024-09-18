@@ -34,7 +34,8 @@ struct RunnerParams
     std::vector<std::string> inputTensorNames;
     std::vector<std::string> outputTensorNames;
     std::string timingCacheFile; //!< Path to timing cache file
-    std::string onnxFileName;
+    std::string onnxFileName;  //!< REQUIRED: Model file in ONNX format.
+    uint32_t nContexts{ 1 };  //!< Number of contexts tensorrt will generate
 };
 
 class TensorRTRunner
@@ -60,6 +61,8 @@ public:
 
     std::vector<size_t> get_input_shape(uint32_t index) const;
     std::vector<size_t> get_output_shape(uint32_t index) const;
+    std::string get_input_tensor_name(uint32_t index) const;
+    std::string get_output_tensor_name(uint32_t index) const;
     size_t get_number_of_inputs() const;
     size_t get_number_of_outputs() const;
     
@@ -68,7 +71,6 @@ private:
 
     std::shared_ptr<nvinfer1::IRuntime> _runtime;   //!< The TensorRT runtime used to deserialize the engine
     std::shared_ptr<nvinfer1::ICudaEngine> _engine; //!< The TensorRT engine used to run the network
-    std::shared_ptr<nvinfer1::INetworkDefinition> _network;
 
     std::vector<std::unique_ptr<nvinfer1::IExecutionContext>> _execution_contexts;
     std::queue<nvinfer1::IExecutionContext*> _idle_contexts;
@@ -85,8 +87,7 @@ private:
     std::condition_variable _busy_contexts_cond;
     std::condition_variable _inference_results_cond;
 
-    bool construct_network(SampleUniquePtr<nvinfer1::IBuilder>& builder,
-        std::shared_ptr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config,
+    bool construct_network(SampleUniquePtr<nvinfer1::IBuilder>& builder, SampleUniquePtr<nvinfer1::INetworkDefinition>& network, SampleUniquePtr<nvinfer1::IBuilderConfig>& config,
         SampleUniquePtr<nvonnxparser::IParser>& parser, SampleUniquePtr<nvinfer1::ITimingCache>& timingCache);
 
     //!
@@ -98,6 +99,16 @@ private:
     //! \brief Classifies digits and verify result
     //!
     bool verify_output(const samplesCommon::BufferManager& buffers);
+
+    //!
+    //! \brief Load plan file
+    //! 
+    bool load_engine(std::vector<char>& data);
+
+    //!
+    //! \brief Save engine to .plan file
+    //! 
+    bool save_engine_to_plan_file(nvinfer1::IHostMemory* plan);
 };
 
 #endif // TENSORRT_RUNNER_H

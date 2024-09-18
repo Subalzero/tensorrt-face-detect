@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <chrono>
 
 #include "opencv2/opencv.hpp"
 

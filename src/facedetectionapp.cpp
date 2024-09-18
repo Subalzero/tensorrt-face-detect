@@ -39,12 +39,21 @@ int FaceDetectionApp::exec()
         return sample::gLogger.reportFail(sampleTest);
     }
 
-    sample::gLogger.reportPass(sampleTest);
-
     cv::VideoCapture cap(0, cv::CAP_MSMF);
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
 
+    cv::Mat frame;
+    cap >> frame;
+    cv::Mat fr = preprocess(frame);
+
+    auto input_shape = _runner.get_input_shape(0);
+
+    std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
+    _runner.process_async({ input_vector });
+
+    std::deque<uint64_t> latency;
+    auto start = std::chrono::system_clock::now();
     while (cap.isOpened())
     {
         cv::Mat frame;
@@ -62,13 +71,38 @@ int FaceDetectionApp::exec()
         std::vector<int> indices;
         postprocess(boxes, scores, frame);
 
+        auto end = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+        latency.push_back(duration.count());
+        if (latency.size() > 200)
+            latency.pop_front();
+
+        uint64_t temp_tot = 0;
+        for (uint64_t i = 0; i < latency.size(); ++i)
+        {
+            temp_tot += latency[i];
+        }
+
+        auto processing_time = temp_tot / latency.size();
+        auto fps = 1000 / processing_time;
+        
+        cv::putText(frame,
+            cv::format("Latency: %d ms. %d frames per sec.", processing_time, fps),
+            cv::Point(15, 50),
+            cv::HersheyFonts::FONT_HERSHEY_COMPLEX,
+            0.8,
+            cv::Scalar(0, 255, 0), 2);
+
         cv::namedWindow("Face", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
         cv::imshow("Face", frame);
         if (cv::waitKey(1) == 27) break;
+
+        start = end;
     }
 
     cap.release();
-    return 0;
+    return sample::gLogger.reportPass(sampleTest);
 }
 
 void FaceDetectionApp::print_help_info()
@@ -110,6 +144,7 @@ RunnerParams FaceDetectionApp::initializeParams(const samplesCommon::Args& args)
     params.fp16 = args.runInFp16;
     params.bf16 = args.runInBf16;
     params.timingCacheFile = args.timingCacheFile;
+    params.nContexts = 3;
 
     return params;
 }
@@ -154,13 +189,6 @@ void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::v
     {
         label_1_scores.push_back(score1);
         label_2_scores.push_back(score2);
-    }
-
-    std::vector<cv::Rect> label_1_boxes, label_2_boxes;
-    for (uint i = 0; i < f_boxes.size(); i += 2)
-    {
-        label_1_boxes.push_back(f_boxes[i]);
-        label_2_boxes.push_back(f_boxes[i + 1]);
     }
 
     std::vector<int> nms_result;

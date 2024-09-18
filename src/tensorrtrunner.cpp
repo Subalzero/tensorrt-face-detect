@@ -106,7 +106,7 @@ bool TensorRTRunner::build()
 		return false;
 	}
 
-	uint32_t nireq = 2;
+	uint32_t nireq = 4;
 	for (uint32_t i = 0; i < nireq; ++i)
 	{
 		_execution_contexts.emplace_back(_engine->createExecutionContext());
@@ -280,7 +280,7 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 
 		float* output = static_cast<float*>(buffers.getHostBuffer(_network->getOutput(i)->getName()));
 
-		std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
+		std::lock_guard<std::mutex> inference_results_lock(_inference_results_mut);
 		_inference_results.push(std::vector<float>(output, output + output_size));
 		_inference_results_cond.notify_one();
 	}

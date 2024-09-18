@@ -42,8 +42,10 @@ int FaceDetectionApp::exec()
     sample::gLogger.reportPass(sampleTest);
 
     cv::VideoCapture cap(0, cv::CAP_MSMF);
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
 
-    if (cap.isOpened())
+    while (cap.isOpened())
     {
         cv::Mat frame;
         cap >> frame;
@@ -58,8 +60,15 @@ int FaceDetectionApp::exec()
         _runner.get(boxes);
 
         std::vector<int> indices;
-        postprocess(boxes, scores, indices);
+        postprocess(boxes, scores, frame);
+
+        cv::namedWindow("Face", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
+        cv::imshow("Face", frame);
+        if (cv::waitKey(1) == 27) break;
     }
+
+    cap.release();
+    return 0;
 }
 
 void FaceDetectionApp::print_help_info()
@@ -112,11 +121,53 @@ cv::Mat FaceDetectionApp::preprocess(const cv::Mat& frame)
     uint32_t mWidth = input_shape[3];
     uint32_t mHeight = input_shape[2];
     cv::resize(frame, out, cv::Size(mWidth, mHeight));
+    cv::cvtColor(out, out, cv::COLOR_BGR2RGB);
     out.convertTo(out, CV_32F);
     cv::Mat output = cv::dnn::blobFromImage(out, 1. / 128, {}, { 127, 127, 127 });
     return output;
 }
 
-void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::vector<float>& scores, std::vector<int>& indices)
+void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::vector<float>& scores, const cv::Mat& frame)
 {
+    unsigned width = frame.cols;
+    unsigned height = frame.rows;
+
+    std::vector<cv::Rect> f_boxes;
+    for (uint32_t i = 0; i < boxes.size(); i += 4)
+    {
+        uint x = static_cast<uint>(boxes[i] * width);
+        uint y = static_cast<uint>(boxes[i + 1] * height);
+        uint w = static_cast<uint>((boxes[i + 2] - boxes[i]) * width);
+        uint h = static_cast<uint>((boxes[i + 3] - boxes[i + 1]) * height);
+
+        f_boxes.emplace_back(x, y, w, h);
+    }
+
+    std::vector<std::pair<float, float>> f_scores;
+    std::vector<float> label_1_scores, label_2_scores;
+    for (uint i = 0; i < scores.size(); i += 2)
+    {
+        f_scores.emplace_back(scores[i], scores[i + 1]);
+    }
+
+    for (const auto& [score1, score2] : f_scores)
+    {
+        label_1_scores.push_back(score1);
+        label_2_scores.push_back(score2);
+    }
+
+    std::vector<cv::Rect> label_1_boxes, label_2_boxes;
+    for (uint i = 0; i < f_boxes.size(); i += 2)
+    {
+        label_1_boxes.push_back(f_boxes[i]);
+        label_2_boxes.push_back(f_boxes[i + 1]);
+    }
+
+    std::vector<int> nms_result;
+    cv::dnn::NMSBoxes(f_boxes, label_2_scores, 0.85, 0.5, nms_result);
+
+    for (int ind : nms_result)
+    {
+        cv::rectangle(frame, f_boxes[ind], cv::Scalar(255, 0, 0), 2);
+    }
 }

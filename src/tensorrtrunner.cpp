@@ -200,7 +200,7 @@ void TensorRTRunner::process_async(const std::vector<std::vector<float>>& input)
 	std::thread(&TensorRTRunner::process, this, input).detach();
 }
 
-void TensorRTRunner::get(std::vector<float>& result)
+void TensorRTRunner::get(std::vector<std::vector<float>>& result)
 {
 	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
 	_inference_results_cond.wait(inference_results_lock, [&]() { return !_inference_results.empty(); });
@@ -368,6 +368,7 @@ bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, 
 bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 {
 	auto n_outputs = get_number_of_outputs();
+	std::vector<std::vector<float>> output_vect;
 	for (uint32_t i = 0; i < n_outputs; ++i)
 	{
 		uint32_t output_size = 0;
@@ -380,10 +381,11 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 
 		float* output = static_cast<float*>(buffers.getHostBuffer(get_output_tensor_name(i)));
 
-		std::lock_guard<std::mutex> inference_results_lock(_inference_results_mut);
-		_inference_results.push(std::vector<float>(output, output + output_size));
-		_inference_results_cond.notify_one();
+		output_vect.push_back(std::vector<float>(output, output + output_size));
 	}
+	std::lock_guard<std::mutex> inference_results_lock(_inference_results_mut);
+	_inference_results.push(std::move(output_vect));
+	_inference_results_cond.notify_one();
 	return true;
 }
 

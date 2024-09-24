@@ -32,7 +32,7 @@ int FaceDetectionApp::exec()
 
     _runner = TensorRTRunner(initializeParams(args));
 
-    sample::gLogInfo << "Building and running a GPU inference engine for Onnx MNIST" << std::endl;
+    sample::gLogInfo << "Building and running a GPU inference engine for Face Detection" << std::endl;
 
     if (!_runner.build())
     {
@@ -64,9 +64,10 @@ int FaceDetectionApp::exec()
         std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
         _runner.process_async({ input_vector });
 
-        std::vector<float> scores, boxes;
-        _runner.get(scores);
-        _runner.get(boxes);
+        std::vector<std::vector<float>> output;
+        _runner.get(output);
+        auto& scores = output[0];
+        auto& boxes = output[1];
 
         std::vector<int> indices;
         postprocess(boxes, scores, frame);
@@ -108,7 +109,7 @@ int FaceDetectionApp::exec()
 void FaceDetectionApp::print_help_info()
 {
     std::cout
-        << "Usage: ./sample_onnx_mnist [-h or --help] [-d or --datadir=<path to data directory>] [--useDLACore=<int>]"
+        << "Usage: ./FaceDetection [-h or --help] [-d or --datadir=<path to data directory>] [--useDLACore=<int>]"
         << "[-t or --timingCacheFile=<path to timing cache file]" << std::endl;
     std::cout << "--help             Display help information" << std::endl;
     std::cout << "--datadir          Specify path to a data directory, overriding the default. This option can be used "

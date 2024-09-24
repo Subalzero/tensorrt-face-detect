@@ -57,7 +57,7 @@ public:
     void process(const std::vector<std::vector<float>>& input);
     void process_async(const std::vector<std::vector<float>>& input);
 
-    void get(std::vector<float>& result);
+    void get(std::vector<std::vector<float>>& result);
 
     std::vector<size_t> get_input_shape(uint32_t index) const;
     std::vector<size_t> get_output_shape(uint32_t index) const;
@@ -75,7 +75,7 @@ private:
     std::vector<std::unique_ptr<nvinfer1::IExecutionContext>> _execution_contexts;
     std::queue<nvinfer1::IExecutionContext*> _idle_contexts;
     std::queue<nvinfer1::IExecutionContext*> _busy_contexts;
-    std::queue<std::vector<float>> _inference_results;
+    std::queue<std::vector<std::vector<float>>> _inference_results;
 
     std::mutex _idle_contexts_mut;
     std::mutex _busy_contexts_mut;

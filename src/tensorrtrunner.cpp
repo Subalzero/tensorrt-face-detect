@@ -344,7 +344,7 @@ bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, 
 	auto n_inputs = get_number_of_inputs();
 	for (int32_t i = 0; i < n_inputs; ++i)
 	{
-		uint32_t input_size = 0;
+		size_t input_size = 0;
 		std::vector<size_t> input_dims = get_input_shape(i);
 		input_size = input_dims[0];
 		for (int i = 1; i < input_dims.size(); ++i)
@@ -352,11 +352,9 @@ bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, 
 			input_size *= input_dims[i];
 		}
 
-		const int nElems = input_size;
-
 		float* hostDataBuffer = static_cast<float*>(buffers.getHostBuffer(get_input_tensor_name(i)));
 
-		for (int j = 0; j < nElems; ++j)
+		for (int j = 0; j < input_size; ++j)
 		{
 			hostDataBuffer[j] = input[i][j];
 		}
@@ -371,7 +369,7 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
 	std::vector<std::vector<float>> output_vect;
 	for (uint32_t i = 0; i < n_outputs; ++i)
 	{
-		uint32_t output_size = 0;
+		size_t output_size = 0;
 		std::vector<size_t> output_dims = get_output_shape(i);
 		output_size = output_dims[0];
 		for (int i = 1; i < output_dims.size(); ++i)

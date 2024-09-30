@@ -1,3 +1,6 @@
 [submodule "thirdparty/vcpkg"]
 	path = thirdparty/vcpkg
 	url = https://github.com/microsoft/vcpkg.git
+[submodule "thirdparty/ByteTrack-cpp"]
+	path = thirdparty/ByteTrack-cpp
+	url = https://github.com/Vertical-Beach/ByteTrack-cpp.git

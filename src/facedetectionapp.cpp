@@ -69,8 +69,32 @@ int FaceDetectionApp::exec()
         auto& scores = output[0];
         auto& boxes = output[1];
 
-        std::vector<int> indices;
-        postprocess(boxes, scores, frame);
+        std::vector<int> nms_result;
+        std::vector<cv::Rect> f_boxes;
+        std::vector<std::pair<float, float>> f_scores;
+        postprocess(boxes, scores, frame, nms_result, f_boxes, f_scores);
+
+        std::vector<byte_track::Object> objects;
+        for (int ind : nms_result)
+        {
+            auto& box = f_boxes[ind];
+            auto& score = f_scores[ind];
+            objects.emplace_back(byte_track::Rect<float>(box.x, box.y, box.width, box.height), 0, score.second);
+            // cv::rectangle(frame, f_boxes[ind], cv::Scalar(0, 255, 0), 2);
+        }
+        auto tracklets = tracker.update(objects);
+
+        for (auto& tracklet : tracklets)
+        {
+            auto box = tracklet->getRect();
+            auto id = tracklet->getTrackId();
+            cv::rectangle(frame, cv::Rect(box.x(), box.y(), box.width(), box.height()), cv::Scalar(0, 255, 0), 3);
+            cv::putText(frame,
+                cv::format("%d", id),
+                cv::Point(box.x(), box.y()),
+                cv::HersheyFonts::FONT_HERSHEY_COMPLEX, 0.8,
+                cv::Scalar(0, 0, 255), 2);
+        }
 
         auto end = std::chrono::system_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -138,8 +162,6 @@ RunnerParams FaceDetectionApp::initializeParams(const samplesCommon::Args& args)
         params.dataDirs = args.dataDirs;
     }
     params.onnxFileName = "version-RFB-640.onnx";
-    params.inputTensorNames.push_back("Input3");
-    params.outputTensorNames.push_back("Plus214_Output_0");
     params.dlaCore = args.useDLACore;
     params.int8 = args.runInInt8;
     params.fp16 = args.runInFp16;
@@ -163,7 +185,14 @@ cv::Mat FaceDetectionApp::preprocess(const cv::Mat& frame)
     return output;
 }
 
-void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::vector<float>& scores, const cv::Mat& frame)
+void FaceDetectionApp::postprocess(
+    const std::vector<float>& boxes,
+    const std::vector<float>& scores,
+    const cv::Mat& frame,
+    std::vector<int>& nms_result,
+    std::vector<cv::Rect>& boxes_result,
+    std::vector<std::pair<float, float>>& score_results
+)
 {
     unsigned width = frame.cols;
     unsigned height = frame.rows;
@@ -192,11 +221,7 @@ void FaceDetectionApp::postprocess(const std::vector<float>& boxes, const std::v
         label_2_scores.push_back(score2);
     }
 
-    std::vector<int> nms_result;
     cv::dnn::NMSBoxes(f_boxes, label_2_scores, 0.85, 0.5, nms_result);
-
-    for (int ind : nms_result)
-    {
-        cv::rectangle(frame, f_boxes[ind], cv::Scalar(255, 0, 0), 2);
-    }
+    boxes_result = std::move(f_boxes);
+    score_results = std::move(f_scores);
 }

@@ -7,6 +7,11 @@ link_directories( ${OpenCV_LIB_DIR} ${TENSORRT_DIR}/lib ${CUDA_TOOLKIT_ROOT_DIR}
 
 find_package(OpenCV REQUIRED)
 find_package(CUDA REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(GTest REQUIRED)
+
+file(GLOB ByteTrack_H_FILES thirdparty/ByteTrack-cpp/include/ByteTrack/*.h)
+file(GLOB ByteTrack_SRC_FILES thirdparty/ByteTrack-cpp/src/*.cpp)
 
 file(GLOB COMMON_H_FILES "tensorrt_samples/common/*.h")
 file(GLOB COMMON_SRC_FILES "tensorrt_samples/common/*.cpp" "tensorrt_samples/common/*.c")
@@ -16,13 +21,23 @@ file(GLOB UTILS_SRC_FILES "tensorrt_samples/utils/*.cpp")
 file(GLOB INCLUDE_FILES include/*.hpp include/*.h)
 file(GLOB SRC_FILES src/*.cpp src/*.c)
 
-add_executable(FaceDetection main.cpp ${INCLUDE_FILES} ${SRC_FILES} ${COMMON_H_FILES} ${COMMON_SRC_FILES} ${UTILS_H_FILES} ${UTILS_SRC_FILES})
+add_executable(FaceDetection main.cpp 
+       ${INCLUDE_FILES}
+       ${SRC_FILES} 
+       ${COMMON_H_FILES} 
+       ${COMMON_SRC_FILES} 
+       ${UTILS_H_FILES} 
+       ${UTILS_SRC_FILES}
+       ${ByteTrack_H_FILES}
+       ${ByteTrack_SRC_FILES}
+)
 
 target_include_directories(FaceDetection 
 PRIVATE 
     include
     tensorrt_samples/common
     tensorrt_samples
+    thirdparty/ByteTrack-cpp/include
 )
 
 target_link_libraries(FaceDetection 

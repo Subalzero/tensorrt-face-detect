@@ -148,58 +148,6 @@ bool TensorRTRunner::build()
 	return true;
 }
 
-void TensorRTRunner::process(const std::vector<std::vector<float>>& input)
-{
-	// Create RAII buffer manager object
-	std::unique_lock<std::mutex> engine_lock(_engine_mut);
-	samplesCommon::BufferManager buffers(_engine);
-	engine_lock.unlock();
-
-	std::unique_lock<std::mutex> idle_context_lock(_idle_contexts_mut);
-	_idle_contexts_cond.wait(idle_context_lock, [&]() { return !_idle_contexts.empty(); });
-	nvinfer1::IExecutionContext* context = _idle_contexts.front();
-	_idle_contexts.pop();
-	idle_context_lock.unlock();
-
-	for (int32_t i = 0, e = _engine->getNbIOTensors(); i < e; i++)
-	{
-		auto const name = _engine->getIOTensorName(i);
-		context->setTensorAddress(name, buffers.getDeviceBuffer(name));
-	}
-
-	process_input(buffers, input);
-
-	// Memcpy from host input buffers to device input buffers
-	buffers.copyInputToDevice();
-
-	std::unique_lock<std::mutex> busy_contexts_lock(_busy_contexts_mut);
-	_busy_contexts.push(context);
-	_busy_contexts_cond.notify_one();
-	busy_contexts_lock.unlock();
-
-	context->executeV2(buffers.getDeviceBindings().data());
-
-	// Memcpy from device output buffers to host output buffers
-	buffers.copyOutputToHost();
-
-	verify_output(buffers);
-
-	busy_contexts_lock.lock();
-	_busy_contexts_cond.wait(busy_contexts_lock, [&]() { return !_busy_contexts.empty(); });
-	_busy_contexts.pop();
-	busy_contexts_lock.unlock();
-
-	idle_context_lock.lock();
-	_idle_contexts.push(context);
-	_idle_contexts_cond.notify_one();
-	idle_context_lock.unlock();
-}
-
-void TensorRTRunner::process_async(const std::vector<std::vector<float>>& input)
-{
-	std::thread(&TensorRTRunner::process, this, input).detach();
-}
-
 void TensorRTRunner::get(std::vector<std::vector<float>>& result)
 {
 	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
@@ -335,30 +283,6 @@ bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& buil
 	}
 
 	samplesCommon::enableDLA(builder.get(), config.get(), _params.dlaCore);
-
-	return true;
-}
-
-bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, const std::vector<std::vector<float>>& input)
-{
-	auto n_inputs = get_number_of_inputs();
-	for (int32_t i = 0; i < n_inputs; ++i)
-	{
-		size_t input_size = 0;
-		std::vector<size_t> input_dims = get_input_shape(i);
-		input_size = input_dims[0];
-		for (int i = 1; i < input_dims.size(); ++i)
-		{
-			input_size *= input_dims[i];
-		}
-
-		float* hostDataBuffer = static_cast<float*>(buffers.getHostBuffer(get_input_tensor_name(i)));
-
-		for (int j = 0; j < input_size; ++j)
-		{
-			hostDataBuffer[j] = input[i][j];
-		}
-	}
 
 	return true;
 }

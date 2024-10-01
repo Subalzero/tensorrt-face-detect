@@ -19,9 +19,19 @@
 #include <condition_variable>
 #include <vector>
 #include <queue>
+#include <concepts>
+#include <utility>
 
 using namespace nvinfer1;
 using samplesCommon::SampleUniquePtr;
+
+// Concept to check if a type is a std::vector
+template<typename T>
+concept Vector = requires(T a) {
+    typename T::value_type;  // Checks that T has a nested value_type
+    { a.begin() } -> std::same_as<typename T::iterator>;  // Checks for begin iterator
+    { a.data() } -> std::convertible_to<void*>; // Checks for data() method
+};
 
 struct RunnerParams
 {
@@ -54,8 +64,59 @@ public:
 
     bool build();
 
-    void process(const std::vector<std::vector<float>>& input);
-    void process_async(const std::vector<std::vector<float>>& input);
+    template <Vector... Vecs>
+    void process(const Vecs&... vecs)
+    {
+        // Create RAII buffer manager object
+        std::unique_lock<std::mutex> engine_lock(_engine_mut);
+        samplesCommon::BufferManager buffers(_engine);
+        engine_lock.unlock();
+
+        std::unique_lock<std::mutex> idle_context_lock(_idle_contexts_mut);
+        _idle_contexts_cond.wait(idle_context_lock, [&]() { return !_idle_contexts.empty(); });
+        nvinfer1::IExecutionContext* context = _idle_contexts.front();
+        _idle_contexts.pop();
+        idle_context_lock.unlock();
+
+        for (int32_t i = 0, e = _engine->getNbIOTensors(); i < e; i++)
+        {
+            auto const name = _engine->getIOTensorName(i);
+            context->setTensorAddress(name, buffers.getDeviceBuffer(name));
+        }
+
+        process_input(buffers, vecs...);
+
+        // Memcpy from host input buffers to device input buffers
+        buffers.copyInputToDevice();
+
+        std::unique_lock<std::mutex> busy_contexts_lock(_busy_contexts_mut);
+        _busy_contexts.push(context);
+        _busy_contexts_cond.notify_one();
+        busy_contexts_lock.unlock();
+
+        context->executeV2(buffers.getDeviceBindings().data());
+
+        // Memcpy from device output buffers to host output buffers
+        buffers.copyOutputToHost();
+
+        verify_output(buffers);
+
+        busy_contexts_lock.lock();
+        _busy_contexts_cond.wait(busy_contexts_lock, [&]() { return !_busy_contexts.empty(); });
+        _busy_contexts.pop();
+        busy_contexts_lock.unlock();
+
+        idle_context_lock.lock();
+        _idle_contexts.push(context);
+        _idle_contexts_cond.notify_one();
+        idle_context_lock.unlock();
+    }
+
+    template <Vector... Vecs>
+    void process_async(const Vecs&... vecs)
+    {
+        std::thread(&TensorRTRunner::process<Vecs...>, this, vecs...).detach();
+    }
 
     void get(std::vector<std::vector<float>>& result);
 
@@ -93,7 +154,32 @@ private:
     //!
     //! \brief Reads the input  and stores the result in a managed buffer
     //!
-    bool process_input(const samplesCommon::BufferManager& buffers, const std::vector<std::vector<float>>& input);
+    template <Vector... Vecs>
+    bool process_input(const samplesCommon::BufferManager& buffers, const Vecs&... vecs)
+    {
+        auto n_inputs = get_number_of_inputs();
+        std::size_t count = sizeof...(vecs);
+        assert(count == n_inputs);
+        int32_t i = 0;
+        ([&]
+            {
+                size_t input_size = 0;
+                std::vector<size_t> input_dims = get_input_shape(i);
+                input_size = input_dims[0];
+                for (int i = 1; i < input_dims.size(); ++i)
+                {
+                    input_size *= input_dims[i];
+                }
+
+                auto hostDataBuffer = buffers.getHostBuffer(get_input_tensor_name(i));
+
+                memcpy(hostDataBuffer, vecs.data(), input_size * sizeof(vecs[0]));
+
+                ++i;
+            } (), ...);
+
+        return true;
+    }
 
     //!
     //! \brief Classifies digits and verify result

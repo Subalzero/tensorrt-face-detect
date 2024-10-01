@@ -50,7 +50,7 @@ int FaceDetectionApp::exec()
     auto input_shape = _runner.get_input_shape(0);
 
     std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-    _runner.process_async({ input_vector });
+    _runner.process_async(input_vector);
 
     std::deque<uint64_t> latency;
     auto start = std::chrono::system_clock::now();
@@ -62,7 +62,7 @@ int FaceDetectionApp::exec()
         auto input_shape = _runner.get_input_shape(0);
 
         std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-        _runner.process_async({ input_vector });
+        _runner.process_async(input_vector);
 
         std::vector<std::vector<float>> output;
         _runner.get(output);

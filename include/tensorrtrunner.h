@@ -173,7 +173,7 @@ private:
 
                 auto hostDataBuffer = buffers.getHostBuffer(get_input_tensor_name(i));
 
-                memcpy(hostDataBuffer, vecs.data(), input_size * sizeof(vecs[0]));
+                memcpy(hostDataBuffer, vecs.data(), input_size * sizeof(typename Vecs::value_type));
 
                 ++i;
             } (), ...);

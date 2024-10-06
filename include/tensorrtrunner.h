@@ -25,13 +25,17 @@
 using namespace nvinfer1;
 using samplesCommon::SampleUniquePtr;
 
+// Concept to check if a type is integral or float
+template <typename T>
+concept BasicType = std::integral<T> || std::floating_point<T>;
+
 // Concept to check if a type is a std::vector
 template<typename T>
 concept Vector = requires(T a) {
     typename T::value_type;  // Checks that T has a nested value_type
     { a.begin() } -> std::same_as<typename T::iterator>;  // Checks for begin iterator
     { a.data() } -> std::convertible_to<void*>; // Checks for data() method
-};
+} && BasicType<typename T::value_type>;
 
 struct RunnerParams
 {

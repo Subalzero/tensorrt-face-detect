@@ -58,7 +58,6 @@ add_custom_command(
 )
 
 if (WIN32)
-    
     add_custom_command(
         TARGET FaceDetection POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -67,6 +66,4 @@ if (WIN32)
     )
 endif()
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET FaceDetection PROPERTY CXX_STANDARD 20)
-endif()
+set_property(TARGET FaceDetection PROPERTY CXX_STANDARD 20)

@@ -48,9 +48,11 @@ int FaceDetectionApp::exec()
     cv::Mat fr = preprocess(frame);
 
     auto input_shape = _runner.get_input_shape(0);
+    auto input_tensor_name = _runner.get_input_tensor_name(0);
 
     std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-    _runner.process_async(input_vector);
+    Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector) };
+    _runner.process_async(input_tensor);
 
     std::deque<uint64_t> latency;
     auto start = std::chrono::system_clock::now();
@@ -62,12 +64,13 @@ int FaceDetectionApp::exec()
         auto input_shape = _runner.get_input_shape(0);
 
         std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-        _runner.process_async(input_vector);
+        Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector) };
+        _runner.process_async(input_tensor);
 
-        std::vector<std::vector<float>> output;
+        std::vector<Tensor<float>> output;
         _runner.get(output);
-        auto& scores = output[0];
-        auto& boxes = output[1];
+        auto& scores = output[0].data;
+        auto& boxes = output[1].data;
 
         std::vector<int> nms_result;
         std::vector<cv::Rect> f_boxes;

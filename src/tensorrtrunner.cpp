@@ -10,7 +10,7 @@ TensorRTRunner::~TensorRTRunner()
 
 }
 
-TensorRTRunner::TensorRTRunner(const RunnerParams& params):
+TensorRTRunner::TensorRTRunner(const RunnerParams& params) :
 	_params(params)
 {
 
@@ -38,7 +38,7 @@ TensorRTRunner& TensorRTRunner::operator=(TensorRTRunner&& temp) noexcept
 	return *this;
 }
 
-bool TensorRTRunner::build()
+bool TensorRTRunner::build(const std::function<bool(IOptimizationProfile*)>& optimization)
 {
 	auto builder = SampleUniquePtr<nvinfer1::IBuilder>(nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger()));
 	if (!builder)
@@ -89,6 +89,17 @@ bool TensorRTRunner::build()
 		if (!parser)
 		{
 			return false;
+		}
+
+		if (optimization)
+		{
+			nvinfer1::IOptimizationProfile* optimization_profile = builder->createOptimizationProfile();
+			bool ret = optimization(optimization_profile);
+			if (!ret)
+			{
+				return false;
+			}
+			config->addOptimizationProfile(optimization_profile);
 		}
 
 		auto timingCache = SampleUniquePtr<nvinfer1::ITimingCache>();
@@ -148,7 +159,7 @@ bool TensorRTRunner::build()
 	return true;
 }
 
-void TensorRTRunner::get(std::vector<std::vector<float>>& result)
+void TensorRTRunner::get(std::vector<Tensor<float>>& result)
 {
 	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
 	_inference_results_cond.wait(inference_results_lock, [&]() { return !_inference_results.empty(); });
@@ -156,9 +167,9 @@ void TensorRTRunner::get(std::vector<std::vector<float>>& result)
 	_inference_results.pop();
 }
 
-std::vector<size_t> TensorRTRunner::get_input_shape(uint32_t index) const
+std::vector<int> TensorRTRunner::get_input_shape(uint32_t index) const
 {
-	std::vector<size_t> vect{};
+	std::vector<int> vect{};
 
 	nvinfer1::Dims dims = _engine->getTensorShape(get_input_tensor_name(index).c_str());
 	for (int i = 0; i < dims.nbDims; ++i)
@@ -168,9 +179,9 @@ std::vector<size_t> TensorRTRunner::get_input_shape(uint32_t index) const
 	return vect;
 }
 
-std::vector<size_t> TensorRTRunner::get_output_shape(uint32_t index) const
+std::vector<int> TensorRTRunner::get_output_shape(uint32_t index) const
 {
-	std::vector<size_t> vect{};
+	std::vector<int> vect{};
 
 	nvinfer1::Dims dims = _engine->getTensorShape(get_output_tensor_name(index).c_str());
 	for (int i = 0; i < dims.nbDims; ++i)
@@ -178,6 +189,12 @@ std::vector<size_t> TensorRTRunner::get_output_shape(uint32_t index) const
 		vect.push_back(dims.d[i]);
 	}
 	return vect;
+}
+
+nvinfer1::DataType TensorRTRunner::get_tensor_data_type(const std::string& name) const
+{
+	nvinfer1::DataType data_type = _engine->getTensorDataType(name.c_str());
+	return data_type;
 }
 
 std::string TensorRTRunner::get_input_tensor_name(uint32_t index) const
@@ -287,23 +304,29 @@ bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& buil
 	return true;
 }
 
-bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers)
+bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers, const nvinfer1::IExecutionContext* context)
 {
 	auto n_outputs = get_number_of_outputs();
-	std::vector<std::vector<float>> output_vect;
+	std::vector<Tensor<float>> output_vect;
 	for (uint32_t i = 0; i < n_outputs; ++i)
 	{
-		size_t output_size = 0;
-		std::vector<size_t> output_dims = get_output_shape(i);
-		output_size = output_dims[0];
-		for (int i = 1; i < output_dims.size(); ++i)
+		std::string tensor_name = get_output_tensor_name(i);
+		size_t output_size = 1;
+		std::vector<int> output_dims = dims_to_vector(context->getTensorShape(tensor_name.c_str()));
+		for (int i = 0; i < output_dims.size(); ++i)
 		{
+			assert(output_dims[i] != -1);
 			output_size *= output_dims[i];
 		}
 
 		float* output = static_cast<float*>(buffers.getHostBuffer(get_output_tensor_name(i)));
 
-		output_vect.push_back(std::vector<float>(output, output + output_size));
+		Tensor<float> out;
+		out.name = tensor_name;
+		out.dimensions = std::move(output_dims);
+		out.data = std::vector<float>(output, output + output_size);
+
+		output_vect.push_back(std::move(out));
 	}
 	std::lock_guard<std::mutex> inference_results_lock(_inference_results_mut);
 	_inference_results.push(std::move(output_vect));
@@ -346,4 +369,28 @@ bool TensorRTRunner::save_engine_to_plan_file(nvinfer1::IHostMemory* plan)
 	planFile.write(reinterpret_cast<const char*>(plan->data()), plan->size());
 	planFile.close();
 	return true;
+}
+
+nvinfer1::Dims TensorRTRunner::vector_to_dims(const std::vector<int>& vec) const
+{
+	assert(vec.size() <= 8);
+	nvinfer1::Dims dims;
+	dims.nbDims = vec.size();
+	for (int i = 0; i < dims.nbDims; ++i)
+	{
+		dims.d[i] = vec[i];
+	}
+
+	return dims;
+}
+
+std::vector<int> TensorRTRunner::dims_to_vector(const nvinfer1::Dims& dims) const
+{
+	std::vector<int> vec;
+	vec.reserve(8);
+	for (int i = 0; i < dims.nbDims; ++i)
+	{
+		vec.push_back(dims.d[i]);
+	}
+	return vec;
 }

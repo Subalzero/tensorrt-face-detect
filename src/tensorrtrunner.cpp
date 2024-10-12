@@ -159,11 +159,63 @@ bool TensorRTRunner::build(const std::function<bool(IOptimizationProfile*)>& opt
 	return true;
 }
 
-void TensorRTRunner::get(std::vector<Tensor<float>>& result)
+void TensorRTRunner::process(const std::vector<Tensor>& input_tensors)
+{
+	// Create RAII buffer manager object
+	std::unique_lock<std::mutex> engine_lock(_engine_mut);
+	samplesCommon::BufferManager buffers(_engine);
+	engine_lock.unlock();
+
+	std::unique_lock<std::mutex> idle_context_lock(_idle_contexts_mut);
+	_idle_contexts_cond.wait(idle_context_lock, [&]() { return !_idle_contexts.empty(); });
+	nvinfer1::IExecutionContext* context = _idle_contexts.front();
+	_idle_contexts.pop();
+	idle_context_lock.unlock();
+
+	for (int32_t i = 0, e = _engine->getNbIOTensors(); i < e; i++)
+	{
+		auto const name = _engine->getIOTensorName(i);
+		context->setTensorAddress(name, buffers.getDeviceBuffer(name));
+	}
+
+	process_input(buffers, context, input_tensors);
+
+	// Memcpy from host input buffers to device input buffers
+	buffers.copyInputToDevice();
+
+	std::unique_lock<std::mutex> busy_contexts_lock(_busy_contexts_mut);
+	_busy_contexts.push(context);
+	_busy_contexts_cond.notify_one();
+	busy_contexts_lock.unlock();
+
+	context->executeV2(buffers.getDeviceBindings().data());
+
+	// Memcpy from device output buffers to host output buffers
+	buffers.copyOutputToHost();
+
+	verify_output(buffers, context);
+
+	busy_contexts_lock.lock();
+	_busy_contexts_cond.wait(busy_contexts_lock, [&]() { return !_busy_contexts.empty(); });
+	_busy_contexts.pop();
+	busy_contexts_lock.unlock();
+
+	idle_context_lock.lock();
+	_idle_contexts.push(context);
+	_idle_contexts_cond.notify_one();
+	idle_context_lock.unlock();
+}
+
+void TensorRTRunner::process_async(const std::vector<Tensor>& input_tensors)
+{
+	std::thread(&TensorRTRunner::process, this, input_tensors).detach();
+}
+
+void TensorRTRunner::get(std::vector<Tensor>& result)
 {
 	std::unique_lock<std::mutex> inference_results_lock(_inference_results_mut);
 	_inference_results_cond.wait(inference_results_lock, [&]() { return !_inference_results.empty(); });
-	result = _inference_results.front();
+	result = std::move(_inference_results.front());
 	_inference_results.pop();
 }
 
@@ -195,6 +247,24 @@ nvinfer1::DataType TensorRTRunner::get_tensor_data_type(const std::string& name)
 {
 	nvinfer1::DataType data_type = _engine->getTensorDataType(name.c_str());
 	return data_type;
+}
+
+constexpr size_t TensorRTRunner::get_tensor_data_size(const nvinfer1::DataType& data_type) const
+{
+	switch (data_type)
+	{
+	case DataType::kFLOAT:      return 4;
+	case DataType::kHALF:       return 2;
+	case DataType::kINT8:       return 1;
+	case DataType::kINT32:      return 4;
+	case DataType::kBOOL:       return 1;
+	case DataType::kUINT8:      return 1;
+	case DataType::kFP8:        return 1;
+	case DataType::kBF16:       return 2;
+	case DataType::kINT64:      return 8;
+	case DataType::kINT4:       return 2;
+	default:                    return 0;
+	}
 }
 
 std::string TensorRTRunner::get_input_tensor_name(uint32_t index) const
@@ -304,10 +374,39 @@ bool TensorRTRunner::construct_network(SampleUniquePtr<nvinfer1::IBuilder>& buil
 	return true;
 }
 
+bool TensorRTRunner::process_input(const samplesCommon::BufferManager& buffers, nvinfer1::IExecutionContext* context, const std::vector<Tensor>& tensors)
+{
+	auto n_inputs = get_number_of_inputs();
+	std::size_t count = tensors.size();
+	assert(count == n_inputs);
+	for (int i = 0; i < tensors.size(); ++i)
+	{
+		auto& tensor = tensors[i];
+		std::string tensor_name = tensor.name;
+		context->setInputShape(tensor_name.c_str(), vector_to_dims(tensor.shape));
+
+		assert(tensor.data_type == get_tensor_data_type(tensor_name));
+
+		size_t input_size = 1;
+		std::vector<int> input_dims = dims_to_vector(context->getTensorShape(tensor_name.c_str()));
+		for (int i = 0; i < input_dims.size(); ++i)
+		{
+			assert(input_dims[i] != -1);
+			input_size *= input_dims[i];
+		}
+
+		auto hostDataBuffer = buffers.getHostBuffer(get_input_tensor_name(i));
+
+		memcpy(hostDataBuffer, tensor.data.data(), input_size * get_tensor_data_size(tensor.data_type));
+	}
+
+	return true;
+}
+
 bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers, const nvinfer1::IExecutionContext* context)
 {
 	auto n_outputs = get_number_of_outputs();
-	std::vector<Tensor<float>> output_vect;
+	std::vector<Tensor> output_vect;
 	for (uint32_t i = 0; i < n_outputs; ++i)
 	{
 		std::string tensor_name = get_output_tensor_name(i);
@@ -319,12 +418,14 @@ bool TensorRTRunner::verify_output(const samplesCommon::BufferManager& buffers, 
 			output_size *= output_dims[i];
 		}
 
-		float* output = static_cast<float*>(buffers.getHostBuffer(get_output_tensor_name(i)));
+		unsigned char* output = static_cast<unsigned char*>(buffers.getHostBuffer(get_output_tensor_name(i)));
 
-		Tensor<float> out;
+		Tensor out;
+		auto data_type = get_tensor_data_type(tensor_name);
 		out.name = tensor_name;
-		out.dimensions = std::move(output_dims);
-		out.data = std::vector<float>(output, output + output_size);
+		out.shape = std::move(output_dims);
+		out.data = std::vector<unsigned char>(output, output + output_size * get_tensor_data_size(data_type));
+		out.data_type = data_type;
 
 		output_vect.push_back(std::move(out));
 	}

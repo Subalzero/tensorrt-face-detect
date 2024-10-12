@@ -27,57 +27,28 @@
 using namespace nvinfer1;
 using samplesCommon::SampleUniquePtr;
 
-inline constexpr int typename_to_code(const char* type_name)
-{
-    if (std::string_view(type_name) == "float")                 return 0;
-    else if (std::string_view(type_name) == "char")             return 2;
-    else if (std::string_view(type_name) == "int")              return 3;
-    else if (std::string_view(type_name) == "bool")             return 4;
-    else if (std::string_view(type_name) == "unsigned char")    return 5;
-    else if (std::string_view(type_name) == "long long")        return 8;
-    else if (std::string_view(type_name) == "short")            return 9;
-    else                                                        return -1;
-}
-
-// Concept to check if a type is integral or float
-template <typename T>
-concept BasicType = std::integral<T> || std::floating_point<T>;
-
-// Concept to check if a type is a std::vector
-template<typename T>
-concept Vector = requires(T a) {
-    typename T::value_type;  // Checks that T has a nested value_type
-    { a.begin() } -> std::same_as<typename T::iterator>;  // Checks for begin iterator
-    { a.data() } -> std::convertible_to<void*>; // Checks for data() method
-}&& BasicType<typename T::value_type>;
-
-template <typename T>
-concept TensorLike = requires(T a)
-{
-    typename T::data_type; // Checks that T has a nested data_type
-    { a.name } -> std::convertible_to<std::string>; // Check if name member exists
-    { a.dimensions } -> std::convertible_to<std::vector<int>>; // Check if dimensions member exists
-    { std::remove_cvref_t<decltype(a.data)>{} } -> Vector; // Checks if data is Vector type
-};
-
-//! Tensor Object
-template <BasicType T>
 struct Tensor
 {
     std::string name;
-    std::vector<int> dimensions;
-    std::vector<T> data;
-
-    using data_type = T;
+    std::vector<int> shape;
+    std::vector<unsigned char> data;
+    nvinfer1::DataType data_type;
 
     // Constructor
-    Tensor() {}
+    Tensor()
+        : data_type(DataType::kFLOAT) {}
 
-    Tensor(const std::string& name, const std::vector<int>& dimensions, std::vector<T>&& data)
-        : name(name), dimensions(dimensions), data(std::move(data)) {}
+    Tensor(const std::string& name, 
+        const std::vector<int>& shape, 
+        std::vector<unsigned char>&& data, 
+        const nvinfer1::DataType& data_type)
+        : name(name), shape(shape), data(std::move(data)), data_type(data_type) {}
 
-    Tensor(const std::string& name, const std::vector<int>& dimensions, const std::vector<T>& data)
-        : name(name), dimensions(dimensions), data(data) {}
+    Tensor(const std::string& name, 
+        const std::vector<int>& shape, 
+        const std::vector<unsigned char>& data, 
+        const nvinfer1::DataType& data_type)
+        : name(name), shape(shape), data(data), data_type(data_type) {}
 };
 
 struct RunnerParams
@@ -112,65 +83,16 @@ public:
 
     bool build(const std::function<bool(IOptimizationProfile*)>& optimization = {});
 
-    template <TensorLike... TensorType>
-    void process(const TensorType&... input_tensors)
-    {
-        // Create RAII buffer manager object
-        std::unique_lock<std::mutex> engine_lock(_engine_mut);
-        samplesCommon::BufferManager buffers(_engine);
-        engine_lock.unlock();
+    void process(const std::vector<Tensor>& input_tensors);
 
-        std::unique_lock<std::mutex> idle_context_lock(_idle_contexts_mut);
-        _idle_contexts_cond.wait(idle_context_lock, [&]() { return !_idle_contexts.empty(); });
-        nvinfer1::IExecutionContext* context = _idle_contexts.front();
-        _idle_contexts.pop();
-        idle_context_lock.unlock();
+    void process_async(const std::vector<Tensor>& input_tensors);
 
-        for (int32_t i = 0, e = _engine->getNbIOTensors(); i < e; i++)
-        {
-            auto const name = _engine->getIOTensorName(i);
-            context->setTensorAddress(name, buffers.getDeviceBuffer(name));
-        }
-
-        process_input(buffers, context, input_tensors...);
-
-        // Memcpy from host input buffers to device input buffers
-        buffers.copyInputToDevice();
-
-        std::unique_lock<std::mutex> busy_contexts_lock(_busy_contexts_mut);
-        _busy_contexts.push(context);
-        _busy_contexts_cond.notify_one();
-        busy_contexts_lock.unlock();
-
-        context->executeV2(buffers.getDeviceBindings().data());
-
-        // Memcpy from device output buffers to host output buffers
-        buffers.copyOutputToHost();
-
-        verify_output(buffers, context);
-
-        busy_contexts_lock.lock();
-        _busy_contexts_cond.wait(busy_contexts_lock, [&]() { return !_busy_contexts.empty(); });
-        _busy_contexts.pop();
-        busy_contexts_lock.unlock();
-
-        idle_context_lock.lock();
-        _idle_contexts.push(context);
-        _idle_contexts_cond.notify_one();
-        idle_context_lock.unlock();
-    }
-
-    template <TensorLike... TensorType>
-    void process_async(const TensorType&... input_tensors)
-    {
-        std::thread(&TensorRTRunner::process<TensorType...>, this, input_tensors...).detach();
-    }
-
-    void get(std::vector<Tensor<float>>& result);
+    void get(std::vector<Tensor>& result);
 
     std::vector<int> get_input_shape(uint32_t index) const;
     std::vector<int> get_output_shape(uint32_t index) const;
     nvinfer1::DataType get_tensor_data_type(const std::string& name) const;
+    constexpr size_t get_tensor_data_size(const nvinfer1::DataType& data_type) const;
     std::string get_input_tensor_name(uint32_t index) const;
     std::string get_output_tensor_name(uint32_t index) const;
     size_t get_number_of_inputs() const;
@@ -185,7 +107,7 @@ private:
     std::vector<std::unique_ptr<nvinfer1::IExecutionContext>> _execution_contexts;
     std::queue<nvinfer1::IExecutionContext*> _idle_contexts;
     std::queue<nvinfer1::IExecutionContext*> _busy_contexts;
-    std::queue<std::vector<Tensor<float>>> _inference_results;
+    std::queue<std::vector<Tensor>> _inference_results;
 
     std::mutex _idle_contexts_mut;
     std::mutex _busy_contexts_mut;
@@ -203,40 +125,7 @@ private:
     //!
     //! \brief Reads the input  and stores the result in a managed buffer
     //!
-    template <TensorLike... TensorType>
-    bool process_input(const samplesCommon::BufferManager& buffers, nvinfer1::IExecutionContext* context, const TensorType&... tensors)
-    {
-        auto n_inputs = get_number_of_inputs();
-        std::size_t count = sizeof...(tensors);
-        assert(count == n_inputs);
-        int32_t i = 0;
-        ([&]
-            {
-                std::string tensor_name = tensors.name;
-                context->setInputShape(tensor_name.c_str(), vector_to_dims(tensors.dimensions));
-
-                int32_t type_code = static_cast<int32_t>(get_tensor_data_type(tensor_name));
-                const char* type_name = typeid(typename TensorType::data_type).name();
-
-                assert(type_code == typename_to_code(type_name));
-
-                size_t input_size = 1;
-                std::vector<int> input_dims = dims_to_vector(context->getTensorShape(tensor_name.c_str()));
-                for (int i = 0; i < input_dims.size(); ++i)
-                {
-                    assert(input_dims[i] != -1);
-                    input_size *= input_dims[i];
-                }
-
-                auto hostDataBuffer = buffers.getHostBuffer(get_input_tensor_name(i));
-
-                memcpy(hostDataBuffer, tensors.data.data(), input_size * sizeof(typename TensorType::data_type));
-
-                ++i;
-            } (), ...);
-
-        return true;
-    }
+    bool process_input(const samplesCommon::BufferManager& buffers, nvinfer1::IExecutionContext* context, const std::vector<Tensor>& tensors);
 
     //!
     //! \brief Classifies digits and verify result

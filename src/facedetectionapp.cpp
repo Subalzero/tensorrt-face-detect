@@ -49,10 +49,12 @@ int FaceDetectionApp::exec()
 
     auto input_shape = _runner.get_input_shape(0);
     auto input_tensor_name = _runner.get_input_tensor_name(0);
+    auto input_tensor_data_type = _runner.get_tensor_data_type(input_tensor_name);
+    auto data_size = _runner.get_tensor_data_size(input_tensor_data_type);
 
-    std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-    Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector) };
-    _runner.process_async(input_tensor);
+    std::vector<unsigned char> input_vector(fr.data, fr.data + (input_shape[1] * input_shape[2] * input_shape[3]) * data_size);
+    Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector), DataType::kFLOAT };
+    _runner.process_async({ input_tensor });
 
     std::deque<uint64_t> latency;
     auto start = std::chrono::system_clock::now();
@@ -63,14 +65,27 @@ int FaceDetectionApp::exec()
         cv::Mat fr = preprocess(frame);
         auto input_shape = _runner.get_input_shape(0);
 
-        std::vector<float> input_vector((float*)fr.data, (float*)fr.data + (input_shape[1] * input_shape[2] * input_shape[3]));
-        Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector) };
-        _runner.process_async(input_tensor);
+        std::vector<unsigned char> input_vector(fr.data, fr.data + (input_shape[1] * input_shape[2] * input_shape[3]) * data_size);
+        Tensor input_tensor = { input_tensor_name, input_shape, std::move(input_vector), DataType::kFLOAT };
+        _runner.process_async({ input_tensor });
 
-        std::vector<Tensor<float>> output;
+        std::vector<Tensor> output;
         _runner.get(output);
-        auto& scores = output[0].data;
-        auto& boxes = output[1].data;
+        // Scores total size
+        size_t score_tot_size = 1;
+        for (int i = 0; i < output[0].shape.size(); ++i)
+        {
+            score_tot_size *= output[0].shape[i];
+        }
+        size_t box_tot_size = 1;
+        for (int i = 0; i < output[1].shape.size(); ++i)
+        {
+            box_tot_size *= output[1].shape[i];
+        }
+        auto scores = std::vector<float>(reinterpret_cast<float*>(output[0].data.data()),
+            reinterpret_cast<float*>(output[0].data.data()) + score_tot_size);
+        auto boxes = std::vector<float>(reinterpret_cast<float*>(output[1].data.data()),
+            reinterpret_cast<float*>(output[1].data.data()) + box_tot_size);
 
         std::vector<int> nms_result;
         std::vector<cv::Rect> f_boxes;

@@ -98,6 +98,10 @@ public:
     size_t get_number_of_inputs() const;
     size_t get_number_of_outputs() const;
 
+    static nvinfer1::Dims vector_to_dims(const std::vector<int>& vec);
+
+    static std::vector<int> dims_to_vector(const nvinfer1::Dims& dims);
+
 private:
     RunnerParams _params;
 
@@ -141,10 +145,6 @@ private:
     //! \brief Save engine to .plan file
     //! 
     bool save_engine_to_plan_file(nvinfer1::IHostMemory* plan);
-
-    nvinfer1::Dims vector_to_dims(const std::vector<int>& vec) const;
-
-    std::vector<int> dims_to_vector(const nvinfer1::Dims& dims) const;
 };
 
 #endif // TENSORRT_RUNNER_H

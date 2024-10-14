@@ -443,7 +443,7 @@ bool TensorRTRunner::load_engine(std::vector<char>& data) {
 	std::ifstream file(engineFilePath, std::ios::binary);
 	if (!file) {
 		//throw std::runtime_error("Could not open engine file: " + engineFilePath);
-		sample::gLogError << "Could not open engine file: " + engineFilePath << std::endl;
+		sample::gLogWarning << "Could not open engine file: " + engineFilePath << std::endl;
 		sample::gLogInfo << "Will attempt to create engine file from .onnx model." << std::endl;
 		return false;
 	}
@@ -472,7 +472,7 @@ bool TensorRTRunner::save_engine_to_plan_file(nvinfer1::IHostMemory* plan)
 	return true;
 }
 
-nvinfer1::Dims TensorRTRunner::vector_to_dims(const std::vector<int>& vec) const
+nvinfer1::Dims TensorRTRunner::vector_to_dims(const std::vector<int>& vec)
 {
 	assert(vec.size() <= 8);
 	nvinfer1::Dims dims;
@@ -485,7 +485,7 @@ nvinfer1::Dims TensorRTRunner::vector_to_dims(const std::vector<int>& vec) const
 	return dims;
 }
 
-std::vector<int> TensorRTRunner::dims_to_vector(const nvinfer1::Dims& dims) const
+std::vector<int> TensorRTRunner::dims_to_vector(const nvinfer1::Dims& dims)
 {
 	std::vector<int> vec;
 	vec.reserve(8);
